@@ -1,1 +1,5 @@
 .env
+.ipynb_checkpoints/
+*.ipynb
+anaconda_projects/
+*.db
