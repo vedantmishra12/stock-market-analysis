@@ -10,46 +10,33 @@ st.set_page_config(
 # ── Animated Background ───────────────────────────────────
 st.markdown("""
 <style>
-@keyframes gradientShift {
-    0%   { background-position: 0% 50%; }
-    50%  { background-position: 100% 50%; }
-    100% { background-position: 0% 50%; }
-}
-
 .stApp {
-    background: linear-gradient(-45deg, #e8f4fd, #f0f7ff, #e8f0fe, #f3e8ff);
-    background-size: 400% 400%;
-    animation: gradientShift 10s ease infinite;
+    background-image: url("https://raw.githubusercontent.com/vedantmishra12/stock-market-analysis/main/assets/background.jpg");
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+    background-attachment: fixed;
 }
 
-.stApp > header {
-    background: transparent;
+.stApp::before {
+    content: "";
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(255, 255, 255, 0.85);
+    z-index: 0;
+}
+
+.main .block-container {
+    position: relative;
+    z-index: 1;
 }
 
 [data-testid="stSidebar"] {
-    background: rgba(255, 255, 255, 0.85);
+    background: rgba(255, 255, 255, 0.9);
     backdrop-filter: blur(10px);
-}
-
-.stMetric {
-    background: rgba(255, 255, 255, 0.7);
-    border-radius: 12px;
-    padding: 10px;
-    backdrop-filter: blur(5px);
-    border: 1px solid rgba(108, 99, 255, 0.2);
-}
-
-.stButton > button {
-    background: linear-gradient(135deg, #6C63FF, #4FACFE);
-    color: white;
-    border: none;
-    border-radius: 8px;
-    font-weight: bold;
-}
-
-.stButton > button:hover {
-    background: linear-gradient(135deg, #4FACFE, #6C63FF);
-    transform: scale(1.02);
 }
 </style>
 """, unsafe_allow_html=True)
@@ -72,7 +59,8 @@ page = st.sidebar.radio("Navigate", [
     "🔮 Price Prediction",
     "💼 Portfolio Tracker",
     "🤖 AI Stock Assistant",
-    "🔔 Price Alerts"
+    "🔔 Price Alerts",
+    "🧠 ML Price Predictor"
 ])
 
 # ── Stock selector ─────────────────────────────────────────
@@ -95,14 +83,26 @@ ticker = POPULAR_STOCKS[selected_name]
 period = st.sidebar.selectbox("Time Period", ["1mo", "3mo", "6mo", "1y", "2y", "5y"], index=3)
 
 # ── Load data ──────────────────────────────────────────────
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=3600)
 def load_stock_data(ticker, period):
-    stock = yf.Ticker(ticker)
-    df = stock.history(period=period)
-    info = stock.info
-    return df, info
+    import time
+    for attempt in range(3):
+        try:
+            stock = yf.Ticker(ticker)
+            df = stock.history(period=period)
+            info = dict(stock.info)
+            return df, info
+        except Exception as e:
+            if attempt < 2:
+                time.sleep(5)
+            else:
+                return pd.DataFrame(), {}
 
 df, info = load_stock_data(ticker, period)
+
+if df is None or len(df) == 0:
+    st.error("⚠️ Could not fetch stock data. Yahoo Finance rate limit reached. Please wait a few minutes and refresh.")
+    st.stop()
 
 # ── Helper ─────────────────────────────────────────────────
 def dark_layout(fig):
@@ -457,6 +457,178 @@ elif page == "🔔 Price Alerts":
             st.success("All alerts cleared.")
     else:
         st.info("No alerts set yet. Add one above.")
+
+# ══════════════════════════════════════════════════════════
+# PAGE 7 — ML PRICE PREDICTOR
+# ══════════════════════════════════════════════════════════
+elif page == "🧠 ML Price Predictor":
+    st.title("🧠 Live ML Price Direction Predictor")
+    st.markdown("### Model trains on live data every time you run a prediction")
+    st.markdown("---")
+    st.warning("⚠️ For educational purposes only. Not financial advice.")
+
+    from sklearn.ensemble import GradientBoostingClassifier
+    from sklearn.model_selection import train_test_split
+    from sklearn.metrics import accuracy_score, classification_report
+    from sklearn.preprocessing import StandardScaler
+    import warnings
+    warnings.filterwarnings('ignore')
+
+    predict_stock = st.selectbox("Select Stock to Predict", list(POPULAR_STOCKS.keys()), key="predict_stock")
+    predict_ticker = POPULAR_STOCKS[predict_stock]
+
+    if st.button("🚀 Train Model & Predict", use_container_width=True):
+        with st.spinner("Fetching live data and training model..."):
+
+            # ── 1. Fetch live data ─────────────────────────────
+            raw = yf.Ticker(predict_ticker).history(period="2y")
+            raw = raw.dropna()
+
+            # ── 2. Feature Engineering ─────────────────────────
+            df_ml = raw.copy()
+
+            # Price features
+            df_ml['return_1d']  = df_ml['Close'].pct_change(1)
+            df_ml['return_5d']  = df_ml['Close'].pct_change(5)
+            df_ml['return_10d'] = df_ml['Close'].pct_change(10)
+
+            # Moving averages
+            df_ml['MA10']  = df_ml['Close'].rolling(10).mean()
+            df_ml['MA20']  = df_ml['Close'].rolling(20).mean()
+            df_ml['MA50']  = df_ml['Close'].rolling(50).mean()
+            df_ml['MA_cross_10_20'] = df_ml['MA10'] - df_ml['MA20']
+            df_ml['MA_cross_20_50'] = df_ml['MA20'] - df_ml['MA50']
+
+            # RSI
+            delta = df_ml['Close'].diff()
+            gain  = delta.where(delta > 0, 0).rolling(14).mean()
+            loss  = (-delta.where(delta < 0, 0)).rolling(14).mean()
+            df_ml['RSI'] = 100 - (100 / (1 + gain / loss))
+
+            # Volatility
+            df_ml['volatility'] = df_ml['Close'].rolling(10).std()
+
+            # Volume change
+            df_ml['volume_change'] = df_ml['Volume'].pct_change()
+
+            # Bollinger Band position
+            bb_mid   = df_ml['Close'].rolling(20).mean()
+            bb_std   = df_ml['Close'].rolling(20).std()
+            df_ml['bb_position'] = (df_ml['Close'] - bb_mid) / (2 * bb_std)
+
+            # High/Low range
+            df_ml['hl_range'] = (df_ml['High'] - df_ml['Low']) / df_ml['Close']
+
+            # ── 3. Target: will price go up tomorrow? ──────────
+            df_ml['target'] = (df_ml['Close'].shift(-1) > df_ml['Close']).astype(int)
+
+            # ── 4. Clean ───────────────────────────────────────
+            features = [
+                'return_1d', 'return_5d', 'return_10d',
+                'MA_cross_10_20', 'MA_cross_20_50',
+                'RSI', 'volatility', 'volume_change',
+                'bb_position', 'hl_range'
+            ]
+            df_ml = df_ml.dropna()
+            X = df_ml[features]
+            y = df_ml['target']
+
+            # ── 5. Train/test split (time-aware) ───────────────
+            split = int(len(df_ml) * 0.8)
+            X_train, X_test = X.iloc[:split], X.iloc[split:]
+            y_train, y_test = y.iloc[:split], y.iloc[split:]
+
+            # ── 6. Scale ───────────────────────────────────────
+            scaler = StandardScaler()
+            X_train_sc = scaler.fit_transform(X_train)
+            X_test_sc  = scaler.transform(X_test)
+
+            # ── 7. Train ───────────────────────────────────────
+            model_ml = GradientBoostingClassifier(
+                n_estimators=200,
+                max_depth=4,
+                learning_rate=0.05,
+                random_state=42
+            )
+            model_ml.fit(X_train_sc, y_train)
+
+            # ── 8. Evaluate ────────────────────────────────────
+            preds    = model_ml.predict(X_test_sc)
+            accuracy = accuracy_score(y_test, preds)
+
+            # ── 9. Predict tomorrow ────────────────────────────
+            latest_features = scaler.transform(X.iloc[[-1]])
+            tomorrow_pred   = model_ml.predict(latest_features)[0]
+            tomorrow_proba  = model_ml.predict_proba(latest_features)[0]
+
+        # ── Display Results ────────────────────────────────────
+        st.markdown("---")
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Model Accuracy", f"{accuracy*100:.1f}%")
+        col2.metric("Training Samples", f"{len(X_train)}")
+        col3.metric("Test Samples", f"{len(X_test)}")
+
+        st.markdown("---")
+        st.subheader("🔮 Tomorrow's Prediction")
+
+        if tomorrow_pred == 1:
+            st.success(f"📈 **{predict_stock} is predicted to go UP tomorrow**")
+        else:
+            st.error(f"📉 **{predict_stock} is predicted to go DOWN tomorrow**")
+
+        up_prob   = tomorrow_proba[1] * 100
+        down_prob = tomorrow_proba[0] * 100
+
+        col4, col5 = st.columns(2)
+        col4.metric("Probability UP ↑", f"{up_prob:.1f}%")
+        col5.metric("Probability DOWN ↓", f"{down_prob:.1f}%")
+
+        # Probability bar
+        proba_df = pd.DataFrame({
+            'Direction': ['UP ↑', 'DOWN ↓'],
+            'Probability': [up_prob, down_prob]
+        })
+        fig_proba = px.bar(
+            proba_df, x='Direction', y='Probability',
+            color='Direction',
+            color_discrete_map={'UP ↑': '#00b894', 'DOWN ↓': '#d63031'},
+            title='Prediction Confidence'
+        )
+        st.plotly_chart(dark_layout(fig_proba), use_container_width=True)
+
+        # Feature importance
+        st.subheader("📊 Feature Importance")
+        importance_df = pd.DataFrame({
+            'Feature': features,
+            'Importance': model_ml.feature_importances_
+        }).sort_values('Importance', ascending=False)
+
+        fig_imp = px.bar(
+            importance_df, x='Feature', y='Importance',
+            color='Importance', color_continuous_scale='Blues',
+            title='What drove this prediction'
+        )
+        st.plotly_chart(dark_layout(fig_imp), use_container_width=True)
+
+        # Recent price context
+        st.subheader("📉 Recent Price Context")
+        fig_ctx = go.Figure()
+        fig_ctx.add_trace(go.Candlestick(
+            x=raw.index[-60:],
+            open=raw['Open'][-60:],
+            high=raw['High'][-60:],
+            low=raw['Low'][-60:],
+            close=raw['Close'][-60:],
+            name='Price'
+        ))
+        fig_ctx.update_layout(
+            xaxis_rangeslider_visible=False,
+            title='Last 60 Days'
+        )
+        st.plotly_chart(dark_layout(fig_ctx), use_container_width=True)
+
+        st.markdown("---")
+        st.caption("Model trained fresh on live yfinance data. Accuracy reflects historical test set performance only.")
 
 # ── Footer ──────────────────────────────────────────────────
 st.markdown("---")
